@@ -1,6 +1,6 @@
 import argparse
 from collections import Counter
-from PIL import Image
+from PIL import Image, ImageDraw
 import matplotlib.pyplot as plt
 import os
 
@@ -13,32 +13,45 @@ except Exception as e:
     print(f"警告：设置中文字体时出错: {e}。图表中的中文可能无法正确显示。")
 # --- 结束：配置 Matplotlib 支持中文显示 ---
 
-def analyze_image_colors(image_path):
-    """分析图片颜色并返回颜色及其计数的字典。"""
+def analyze_image_colors(image_path, num_quant_colors=0):
+    """分析图片颜色并返回颜色及其计数的字典。
+
+    Args:
+        image_path (str): 图片路径。
+        num_quant_colors (int): 量化后的目标颜色数量。如果为 0 或 None，则不进行量化。
+    """
     try:
-        img = Image.open(image_path)
-        # 转换为 RGB 以处理带 Alpha 通道的图片（如 PNG）
-        # 如果图像是调色板模式 (P)，先转换为 RGB
-        if img.mode == 'P':
-            img = img.convert('RGBA') # 先转 RGBA 保留透明度信息
-            img = img.convert('RGB') # 再转 RGB，透明部分会变黑，但计数时忽略
-        elif img.mode == 'RGBA':
-             # 对于 RGBA 图像，我们可以选择将透明像素视为一种颜色或忽略它们
-             # 这里我们将其转换为 RGB，透明像素会根据背景（通常是黑色或白色）混合
-             # 或者我们可以直接获取所有像素，保留 alpha 值
-             # 为了简化，先转换为 RGB，丢失 alpha 信息
-             img = img.convert('RGB')
-        elif img.mode != 'RGB':
-             img = img.convert('RGB')
+        img_original = Image.open(image_path)
 
+        # --- 修改：先将图片统一转换为 RGB --- 
+        print("将图片转换为 RGB 模式...")
+        img_rgb = img_original.convert('RGB')
+        print(f"转换完成，图像模式: {img_rgb.mode}")
 
-        pixels = list(img.getdata())
-        # 对于非常大的图片，一次性加载所有像素可能消耗大量内存
-        # 可以考虑分块处理或使用 img.getcolors()，但 getcolors 对颜色数量有限制
+        # --- 修改：在 RGB 图像上进行量化 --- 
+        img_to_process = img_rgb # 默认使用 RGB 图像
+        if num_quant_colors and num_quant_colors > 0:
+            print(f"对 RGB 图像进行颜色量化，目标颜色数量: {num_quant_colors}")
+            # MEDIANCUT 可以在 RGB 上正常工作
+            try:
+                # 量化 RGB 图像
+                img_quantized = img_rgb.quantize(colors=num_quant_colors, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE)
+                # 将量化后的 'P' 模式图像转换回 RGB 以便获取像素值
+                img_to_process = img_quantized.convert('RGB')
+                print("颜色量化完成。")
+            except Exception as quant_error:
+                print(f"警告：颜色量化失败: {quant_error}。将统计转换后的 RGB 颜色。")
+                # 量化失败，则继续使用之前转换好的 RGB 图像 (img_rgb)
+                img_to_process = img_rgb
+        # --- 结束：颜色量化 ---
 
-        # 移除纯黑像素 (0, 0, 0)，如果它们是转换产生的背景
-        # color_counts = Counter(p for p in pixels if p != (0, 0, 0)) # 这是一个可选项
+        # 确保我们有一个图像来处理 (img_to_process 总是存在的)
+        # print(f"最终处理的图像模式: {img_to_process.mode}") # Debug
+        pixels = list(img_to_process.getdata())
+        # print(f"获取了 {len(pixels)} 像素数据") # Debugging line
+
         color_counts = Counter(pixels)
+        # print(f"计数完成，原始不同颜色数: {len(color_counts)}") # Debugging line
         return color_counts
     except FileNotFoundError:
         print(f"错误：文件未找到 '{image_path}'")
@@ -120,57 +133,39 @@ def plot_color_histogram(color_counts, output_file=None, max_colors_to_plot=50):
             print(f"保存颜色报告文件时出错: {e}")
     # --- 结束：添加保存颜色报告的功能 ---
 
-    if output_file:
-        try:
-            # 确保输出目录存在
-            # os.makedirs(os.path.dirname(output_file), exist_ok=True) # 这行在上面已处理
-            plt.savefig(output_file)
-            print(f"直方图已保存到 '{output_file}'")
-        except Exception as e:
-            print(f"保存文件时出错: {e}")
-    else:
-        plt.show()
+    try:
+        plt.savefig(output_file)
+        print(f"直方图已保存到 '{output_file}'")
+        plt.close() # 关闭图形，防止在循环中使用时内存泄漏或窗口堆积
+    except Exception as e:
+        print(f"保存直方图文件时出错: {e}")
 
 def main():
-    parser = argparse.ArgumentParser(description='生成图片颜色分布直方图。')
+    # --- 修改：简化参数解析器 --- 
+    parser = argparse.ArgumentParser(description='生成图片颜色分布直方图 (默认进行 64 色量化并保存结果)。')
     parser.add_argument('image_path', type=str, help='输入图片文件的路径。')
     parser.add_argument('--top', type=int, default=50, help='直方图显示的最常见颜色数量上限 (默认: 50)。')
-
-    # 使用互斥组来处理输出选项
-    output_group = parser.add_mutually_exclusive_group()
-    output_group.add_argument(
-        '--output',
-        type=str,
-        help='将直方图保存到的可选输出文件路径 (例如: report/custom_name.png)。'
-    )
-    output_group.add_argument(
-        '--save-to-report',
-        action='store_true',
-        help='自动将输出保存到 \'report/\' 目录，文件名与输入图片名一致 (例如: report/input_image_name.png/.txt)。'
-    )
-
+    # 移除 output, save-to-report, quantize 参数
     args = parser.parse_args()
+    # --- 结束修改 ---
 
-    output_path_for_plot = None
-    if args.output:
-        output_path_for_plot = args.output
-        output_dir = os.path.dirname(output_path_for_plot)
-        if output_dir:  # 确保目录部分不为空
-            os.makedirs(output_dir, exist_ok=True)
-    elif args.save_to_report:
-        input_filename = os.path.basename(args.image_path)
-        base_name = os.path.splitext(input_filename)[0]
-        # 修改：创建以图片名命名的子目录
-        output_dir = os.path.join("report", base_name)
-        os.makedirs(output_dir, exist_ok=True)
-        # 修改：使用固定的图片文件名
-        output_path_for_plot = os.path.join(output_dir, "histogram.png")
+    # --- 修改：设定默认行为 --- 
+    num_quant_colors_default = 64
+    # 根据输入图片名计算输出路径
+    input_filename = os.path.basename(args.image_path)
+    base_name = os.path.splitext(input_filename)[0]
+    output_dir = os.path.join("report", base_name)
+    os.makedirs(output_dir, exist_ok=True)
+    output_path_for_plot = os.path.join(output_dir, "histogram.png")
+    # --- 结束修改 ---
 
     print(f"正在分析图片: {args.image_path}")
-    color_data = analyze_image_colors(args.image_path)
+    print(f"默认进行颜色量化 (目标 {num_quant_colors_default} 色)... " ) # 添加提示
+    # 传递量化参数
+    color_data = analyze_image_colors(args.image_path, num_quant_colors=num_quant_colors_default)
 
     if color_data:
-        print(f"分析完成，找到 {len(color_data)} 种不同的颜色。")
+        print(f"分析完成，找到 {len(color_data)} 种不同的颜色（已量化）。")
         # 传递计算好的输出路径给绘图函数
         plot_color_histogram(color_data, output_path_for_plot, max_colors_to_plot=args.top)
 
