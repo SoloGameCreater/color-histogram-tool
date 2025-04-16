@@ -36,4 +36,16 @@ python color_histogram.py assets/example.png
 
 # 分析 my_pic.jpeg，只在直方图中显示前 30 种颜色，结果保存到 report/my_pic/
 python color_histogram.py images/my_pic.jpeg --top 30
-``` 
+```
+
+## 示例展示
+
+以下是一个示例图片及其通过此工具生成的颜色直方图：
+
+**示例输入 (`assets/sample.jpg`)**
+
+![示例输入图片](./assets/sample.jpg "示例雪山湖景图")
+
+**示例输出 (`assets/histogram.png`)**
+
+![示例输出直方图](./assets/histogram.png "示例图片颜色直方图 (Top 50)") 
